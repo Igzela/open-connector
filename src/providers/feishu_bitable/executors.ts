@@ -1,7 +1,14 @@
 import type { CredentialValidators, ExecutionContext, ProviderExecutors, TransitFileWriter } from "../../core/types.ts";
 import type { FeishuBitableActionName } from "./actions.ts";
 
-import { optionalBoolean, optionalInteger, optionalString, requiredRecord, requiredString } from "../../core/cast.ts";
+import {
+  optionalBoolean,
+  optionalInteger,
+  optionalRecord,
+  optionalString,
+  requiredRecord,
+  requiredString,
+} from "../../core/cast.ts";
 import { readBoundedResponseBytes } from "../../core/request.ts";
 import {
   defineProviderExecutors,
@@ -78,6 +85,9 @@ type FeishuBitableActionHandler = (
 const tokenCache = new Map<string, TokenCacheEntry>();
 
 export const feishuBitableActionHandlers: Record<FeishuBitableActionName, FeishuBitableActionHandler> = {
+  resolve_wiki_node(input, context) {
+    return resolveWikiNode(input, context);
+  },
   list_tables(input, context) {
     return executeJson(
       {
@@ -158,6 +168,29 @@ export const feishuBitableActionHandlers: Record<FeishuBitableActionName, Feishu
     return downloadAttachment(input, context);
   },
 };
+
+async function resolveWikiNode(
+  input: Record<string, unknown>,
+  context: FeishuBitableActionContext,
+): Promise<Record<string, unknown>> {
+  const response = await executeJson(
+    {
+      method: "GET",
+      path: "/wiki/v2/spaces/get_node",
+      query: [["token", providerString(input.wikiToken, "wikiToken")]],
+    },
+    context,
+  );
+  const data = requiredFeishuResponseRecord(response.data, "data");
+  const node = requiredFeishuResponseRecord(data.node, "data.node");
+  const objType = requiredFeishuResponseString(node.obj_type, "data.node.obj_type");
+  const objToken = requiredFeishuResponseString(node.obj_token, "data.node.obj_token");
+  return {
+    objType,
+    objToken,
+    appToken: objType === "bitable" ? objToken : null,
+  };
+}
 
 export const executors: ProviderExecutors = defineProviderExecutors<FeishuBitableActionContext>({
   service,
@@ -415,6 +448,22 @@ function providerString(value: unknown, fieldName: string): string {
 
 function requiredProviderRecord(value: unknown, fieldName: string): Record<string, unknown> {
   return requiredRecord(value, fieldName, (message) => new ProviderRequestError(400, message));
+}
+
+function requiredFeishuResponseRecord(value: unknown, fieldName: string): Record<string, unknown> {
+  const record = optionalRecord(value);
+  if (!record) {
+    throw new ProviderRequestError(502, `Feishu response is missing ${fieldName}`);
+  }
+  return record;
+}
+
+function requiredFeishuResponseString(value: unknown, fieldName: string): string {
+  const text = optionalString(value);
+  if (!text) {
+    throw new ProviderRequestError(502, `Feishu response is missing ${fieldName}`);
+  }
+  return text;
 }
 
 function parseEnvelope(rawText: string): FeishuEnvelope {

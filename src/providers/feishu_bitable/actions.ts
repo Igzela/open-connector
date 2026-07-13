@@ -6,6 +6,7 @@ import { feishuBitableScopes } from "./scopes.ts";
 
 const service = "feishu_bitable";
 const requiredScopes = [feishuBitableScopes.app];
+const wikiRequiredScopes = [feishuBitableScopes.wikiReadonly];
 
 const appTokenSchema = s.nonEmptyString("The Feishu Base app_token. A wiki node token is not an app_token.");
 const tableIdSchema = s.nonEmptyString("The Feishu Base table_id.");
@@ -129,6 +130,20 @@ function paginationProperties() {
 
 export const feishuBitableActions: ActionDefinition[] = [
   defineProviderAction(service, {
+    name: "resolve_wiki_node",
+    description: "Resolve a Feishu Wiki node token to its backing object and Base app token when it is a Bitable.",
+    requiredScopes: wikiRequiredScopes,
+    providerPermissions: wikiRequiredScopes,
+    inputSchema: s.requiredObject("Input for resolving one Feishu Wiki node.", {
+      wikiToken: s.nonEmptyString("The Wiki node token from a /wiki/ URL."),
+    }),
+    outputSchema: s.requiredObject("Resolved Feishu Wiki node.", {
+      objType: s.nonEmptyString("The Feishu object type backing the Wiki node."),
+      objToken: s.nonEmptyString("The Feishu object token backing the Wiki node."),
+      appToken: s.nullable(s.nonEmptyString("The Feishu Base app_token when objType is bitable; otherwise null.")),
+    }),
+  }),
+  defineProviderAction(service, {
     name: "list_tables",
     description: "List tables in one Feishu Base with explicit page-token pagination.",
     requiredScopes,
@@ -248,6 +263,7 @@ export const feishuBitableActions: ActionDefinition[] = [
 ];
 
 export type FeishuBitableActionName =
+  | "resolve_wiki_node"
   | "list_tables"
   | "list_fields"
   | "get_record"

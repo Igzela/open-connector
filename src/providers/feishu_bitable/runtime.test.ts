@@ -10,6 +10,7 @@ interface RecordedRequest {
 }
 
 const expectedActionNames = [
+  "resolve_wiki_node",
   "list_tables",
   "list_fields",
   "get_record",
@@ -25,6 +26,58 @@ describe("Feishu Bitable provider", () => {
     const names = feishuBitableActions.map((action) => action.name);
     expect(names).toEqual(expectedActionNames);
     expect(new Set(names).size).toBe(expectedActionNames.length);
+  });
+
+  it("declares the Wiki read scope on resolve_wiki_node", () => {
+    const action = feishuBitableActions.find((candidate) => candidate.name === "resolve_wiki_node");
+    expect(action?.requiredScopes).toContain("wiki:wiki:readonly");
+    expect(action?.providerPermissions).toContain("wiki:wiki:readonly");
+  });
+
+  it("resolves a Wiki Bitable node to its Base app token", async () => {
+    const requests: RecordedRequest[] = [];
+    const context = createContext(requests, [
+      tokenResponse(),
+      Response.json({
+        code: 0,
+        msg: "success",
+        data: { node: { obj_type: "bitable", obj_token: "bascnResolvedAppToken" } },
+      }),
+    ]);
+
+    await expect(feishuBitableActionHandlers.resolve_wiki_node({ wikiToken: "wiki token" }, context)).resolves.toEqual({
+      objType: "bitable",
+      objToken: "bascnResolvedAppToken",
+      appToken: "bascnResolvedAppToken",
+    });
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.url).toBe("https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=wiki+token");
+    expect(new Headers(requests[1]?.init?.headers).get("authorization")).toBe("Bearer tenant-token");
+  });
+
+  it("does not expose a non-Bitable Wiki object token as an app token", async () => {
+    const context = createContext(
+      [],
+      [
+        tokenResponse(),
+        Response.json({ code: 0, msg: "success", data: { node: { obj_type: "docx", obj_token: "docx1" } } }),
+      ],
+    );
+
+    await expect(feishuBitableActionHandlers.resolve_wiki_node({ wikiToken: "wiki1" }, context)).resolves.toEqual({
+      objType: "docx",
+      objToken: "docx1",
+      appToken: null,
+    });
+  });
+
+  it("rejects malformed Wiki node responses as upstream failures", async () => {
+    const context = createContext([], [tokenResponse(), Response.json({ code: 0, msg: "success", data: {} })]);
+
+    await expect(feishuBitableActionHandlers.resolve_wiki_node({ wikiToken: "wiki1" }, context)).rejects.toMatchObject({
+      status: 502,
+      message: "Feishu response is missing data.node",
+    });
   });
 
   it("authenticates and sends explicit list pagination", async () => {

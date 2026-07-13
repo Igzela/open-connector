@@ -21,7 +21,8 @@ export const provider: ProviderDefinition = {
           inputType: "text",
           required: true,
           secret: false,
-          description: "The App ID of a published Feishu tenant custom app with bitable:app permission.",
+          description:
+            "The App ID of a published Feishu tenant custom app with bitable:app and wiki:wiki:readonly permissions.",
         },
         {
           key: "appSecret",
