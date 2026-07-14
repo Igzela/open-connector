@@ -162,20 +162,37 @@ const appOutput = envelopeSchema(
     { optional: ["app"] },
   ),
 );
-const tableMutationOutput = envelopeSchema(
-  "Feishu table mutation response.",
-  s.looseRequiredObject("Feishu table metadata.", { table: tableSchema }, { optional: ["table"] }),
+const tableCreateOutput = envelopeSchema(
+  "Feishu table creation response.",
+  s.looseRequiredObject(
+    "Feishu created table metadata.",
+    {
+      table_id: s.nonEmptyString("The created table ID."),
+      default_view_id: s.nonEmptyString("The default view ID."),
+      field_id_list: s.array("IDs of fields created with the table.", s.nonEmptyString("A field ID.")),
+    },
+    { optional: ["default_view_id", "field_id_list"] },
+  ),
 );
+const mutationDeleteOutput = envelopeSchema("Feishu deletion response.", s.requiredObject("Empty Feishu data.", {}));
 const fieldMutationOutput = envelopeSchema(
   "Feishu field mutation response.",
   s.looseRequiredObject(
     "Feishu field metadata.",
     {
-      field: fieldSchema,
-      field_id: s.nonEmptyString("The affected field ID."),
-      deleted: s.boolean("Whether the field was deleted."),
+      field: s.looseRequiredObject(
+        "The affected field.",
+        {
+          field_id: s.nonEmptyString("The affected field ID."),
+          field_name: s.nonEmptyString("The affected field name."),
+          type: s.integer("The Feishu field type code."),
+          is_primary: s.boolean("Whether this is the primary field."),
+          property: s.looseObject({}, { description: "Provider-specific field configuration." }),
+        },
+        { optional: ["is_primary", "property"] },
+      ),
     },
-    { optional: ["field", "field_id", "deleted"] },
+    { optional: [] },
   ),
 );
 
@@ -220,7 +237,7 @@ export const feishuBitableActions: ActionDefinition[] = [
         { optional: ["defaultViewName", "fields"] },
       ),
     }),
-    outputSchema: tableMutationOutput,
+    outputSchema: tableCreateOutput,
   }),
   defineProviderAction(service, {
     name: "update_table",
@@ -248,7 +265,7 @@ export const feishuBitableActions: ActionDefinition[] = [
       tableId: tableIdSchema,
       confirmTableId: tableIdSchema,
     }),
-    outputSchema: tableMutationOutput,
+    outputSchema: mutationDeleteOutput,
   }),
   defineProviderAction(service, {
     name: "create_field",
@@ -287,7 +304,7 @@ export const feishuBitableActions: ActionDefinition[] = [
       fieldId: s.nonEmptyString("The exact field ID."),
       confirmFieldId: s.nonEmptyString("The exact field ID confirmation."),
     }),
-    outputSchema: fieldMutationOutput,
+    outputSchema: mutationDeleteOutput,
   }),
   defineProviderAction(service, {
     name: "resolve_wiki_node",
