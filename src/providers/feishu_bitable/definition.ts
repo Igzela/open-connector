@@ -8,7 +8,7 @@ const service = "feishu_bitable";
 export const provider: ProviderDefinition = {
   service,
   displayName: "Feishu Bitable",
-  description: "Read and write Feishu Base tables and records, and download Base attachments.",
+  description: "Read and write Feishu Base tables and records, and safely transfer Base attachments.",
   categories: ["Productivity", "Databases"],
   authTypes: ["custom_credential"],
   auth: [

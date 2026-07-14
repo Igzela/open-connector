@@ -248,6 +248,9 @@ export const feishuBitableActionHandlers: Record<FeishuBitableActionName, Feishu
   download_attachment(input, context) {
     return downloadAttachment(input, context);
   },
+  upload_attachment(input, context) {
+    return uploadAttachment(input, context);
+  },
 };
 
 async function resolveWikiNode(
@@ -469,6 +472,119 @@ async function downloadAttachment(
     };
   } catch (error) {
     throw normalizeTransportError(error, "downloading Feishu attachment");
+  } finally {
+    requestSignal.cleanup();
+  }
+}
+
+async function uploadAttachment(
+  input: Record<string, unknown>,
+  context: FeishuBitableActionContext,
+): Promise<Record<string, unknown>> {
+  if (!context.transitFiles) {
+    throw new ProviderRequestError(500, "upload_attachment requires OpenConnector transit file storage");
+  }
+  const appToken = providerString(input.appToken, "appToken");
+  const tableId = providerString(input.tableId, "tableId");
+  const recordId = providerString(input.recordId, "recordId");
+  const fieldId = providerString(input.fieldId, "fieldId");
+  const fileInput = requiredRecord(input.file, "file", (message) => new ProviderRequestError(400, message));
+  const fileId = providerString(fileInput.fileId, "file.fileId");
+  const append = input.append === true;
+  const transit = await context.transitFiles.read(fileId);
+  const mimeType = normalizeMimeType(transit.mimeType);
+  if (!mimeType || !allowedAttachmentMimeTypes.has(mimeType)) {
+    throw new ProviderRequestError(415, `Attachment MIME type is not allowed: ${mimeType || "missing"}`);
+  }
+  if (transit.sizeBytes <= 0 || transit.sizeBytes > maxAttachmentBytes || transit.file.size > maxAttachmentBytes) {
+    throw new ProviderRequestError(413, `Attachment exceeds ${maxAttachmentBytes} bytes`);
+  }
+
+  const accessToken = await fetchTenantAccessToken(context, context.fetcher, "execute", context.signal);
+  const uploadResponse = await uploadMedia({
+    accessToken,
+    appToken,
+    file: transit.file,
+    fileName: sanitizeFileName(transit.name),
+    fetcher: context.fetcher,
+    signal: context.signal,
+  });
+  const uploadedToken = requiredFeishuResponseString(
+    requiredFeishuResponseRecord(uploadResponse.data, "data").file_token,
+    "data.file_token",
+  );
+
+  let attachmentValues: Array<Record<string, unknown>> = [{ file_token: uploadedToken }];
+  if (append) {
+    const existing = await executeJson(
+      {
+        method: "GET",
+        path: `/bitable/v1/apps/${segment(appToken, "appToken")}/tables/${segment(tableId, "tableId")}/records/${segment(recordId, "recordId")}`,
+      },
+      context,
+    );
+    const existingData = requiredFeishuResponseRecord(existing.data, "data");
+    const existingRecord = requiredFeishuResponseRecord(existingData.record, "data.record");
+    const current = existingRecord.fields;
+    if (current && typeof current === "object" && Array.isArray((current as Record<string, unknown>)[fieldId])) {
+      attachmentValues = [
+        ...((current as Record<string, unknown>)[fieldId] as unknown[]).filter(
+          (value): value is Record<string, unknown> => Boolean(value && typeof value === "object"),
+        ),
+        { file_token: uploadedToken },
+      ];
+    }
+  }
+
+  const updated = await executeJson(
+    {
+      method: "PUT",
+      path: `/bitable/v1/apps/${segment(appToken, "appToken")}/tables/${segment(tableId, "tableId")}/records/${segment(recordId, "recordId")}`,
+      body: { fields: { [fieldId]: attachmentValues } },
+    },
+    context,
+  );
+  const updatedData = requiredFeishuResponseRecord(updated.data, "data");
+  const record = requiredFeishuResponseRecord(updatedData.record, "data.record");
+  return { fileToken: uploadedToken, record };
+}
+
+async function uploadMedia(input: {
+  accessToken: string;
+  appToken: string;
+  file: File;
+  fileName: string;
+  fetcher: typeof fetch;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
+  const form = new FormData();
+  form.set("file_name", input.fileName);
+  form.set("parent_type", "bitable_file");
+  form.set("parent_node", input.appToken);
+  form.set("size", String(input.file.size));
+  form.set("file", input.file, input.fileName);
+  const requestSignal = createRequestSignal(input.signal);
+  try {
+    const response = await input.fetcher(`${feishuOpenBaseUrl}/drive/v1/medias/upload_all`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${input.accessToken}`,
+        "user-agent": providerUserAgent,
+      },
+      body: form,
+      signal: requestSignal.signal,
+    });
+    const rawText = await response.text();
+    const envelope = parseEnvelope(rawText);
+    const code = typeof envelope.code === "number" ? envelope.code : 0;
+    if (!response.ok || code !== 0) throw mapFeishuError(response.status, envelope, rawText, "execute");
+    return {
+      code,
+      msg: optionalString(envelope.msg) ?? "success",
+      ...(envelope.data !== undefined ? { data: envelope.data } : {}),
+    };
+  } catch (error) {
+    throw normalizeTransportError(error, "uploading Feishu Bitable attachment");
   } finally {
     requestSignal.cleanup();
   }

@@ -120,6 +120,9 @@ const transitFileSchema = s.requiredObject("The downloaded attachment stored in 
   mimeType: s.string("The validated MIME type."),
   sizeBytes: s.integer("Downloaded attachment size in bytes."),
 });
+const uploadedTransitFileSchema = s.transitFile(
+  "A local transit file previously uploaded to OpenConnector before sending it to Feishu.",
+);
 
 const fieldMutationSchema = s.object(
   "A strict Feishu field definition.",
@@ -195,6 +198,10 @@ const fieldMutationOutput = envelopeSchema(
     { optional: [] },
   ),
 );
+const attachmentMutationOutput = s.requiredObject("Uploaded and attached Feishu Base file.", {
+  fileToken: s.nonEmptyString("The uploaded Feishu attachment file_token."),
+  record: recordSchema,
+});
 
 function paginationProperties() {
   return {
@@ -437,6 +444,22 @@ export const feishuBitableActions: ActionDefinition[] = [
       file: transitFileSchema,
     }),
   }),
+  defineProviderAction(service, {
+    name: "upload_attachment",
+    description:
+      "Upload one bounded image or PDF transit file to an exact Feishu Base attachment field and attach it to an exact record.",
+    requiredScopes,
+    providerPermissions: requiredScopes,
+    inputSchema: s.requiredObject("Input for uploading one Base attachment.", {
+      appToken: appTokenSchema,
+      tableId: tableIdSchema,
+      recordId: recordIdSchema,
+      fieldId: s.nonEmptyString("The exact Feishu attachment field ID."),
+      file: uploadedTransitFileSchema,
+      append: s.boolean("Append to existing attachments when true; replace them when false."),
+    }),
+    outputSchema: attachmentMutationOutput,
+  }),
 ];
 
 export type FeishuBitableActionName =
@@ -455,4 +478,5 @@ export type FeishuBitableActionName =
   | "create_record"
   | "update_record"
   | "batch_create_records"
-  | "download_attachment";
+  | "download_attachment"
+  | "upload_attachment";

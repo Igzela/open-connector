@@ -26,6 +26,7 @@ const expectedActionNames = [
   "update_record",
   "batch_create_records",
   "download_attachment",
+  "upload_attachment",
 ];
 
 describe("Feishu Bitable provider", () => {
@@ -319,6 +320,91 @@ describe("Feishu Bitable provider", () => {
       status: 415,
     });
     expect(stored).toBe(false);
+  });
+
+  it("uploads a bounded transit image and attaches it to the exact record field", async () => {
+    const requests: RecordedRequest[] = [];
+    const context = createContext(requests, [
+      tokenResponse(),
+      Response.json({ code: 0, msg: "success", data: { file_token: "file-uploaded" } }),
+      Response.json({ code: 0, msg: "success", data: { record: { record_id: "rec1", fields: { Photo: [] } } } }),
+    ]);
+    context.transitFiles = {
+      maxBytes: 10 * 1024 * 1024,
+      async create() {
+        throw new Error("not used");
+      },
+      async read() {
+        return {
+          file: new File([new Uint8Array([1, 2, 3])], "label.png", { type: "image/png" }),
+          sizeBytes: 3,
+          name: "label.png",
+          mimeType: "image/png",
+        };
+      },
+      async delete() {
+        return false;
+      },
+    };
+
+    await expect(
+      feishuBitableActionHandlers.upload_attachment(
+        {
+          appToken: "app1",
+          tableId: "tbl1",
+          recordId: "rec1",
+          fieldId: "Photo",
+          append: false,
+          file: { fileId: "file1" },
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({ fileToken: "file-uploaded", record: { record_id: "rec1" } });
+    expect(requests[1]?.url).toBe("https://open.feishu.cn/open-apis/drive/v1/medias/upload_all");
+    const uploadBody = requests[1]?.init?.body;
+    expect(uploadBody).toBeInstanceOf(FormData);
+    expect((uploadBody as FormData).get("parent_type")).toBe("bitable_file");
+    expect((uploadBody as FormData).get("parent_node")).toBe("app1");
+    expect(requests[2]?.url).toContain("/tables/tbl1/records/rec1");
+    expect(JSON.parse(String(requests[2]?.init?.body))).toEqual({
+      fields: { Photo: [{ file_token: "file-uploaded" }] },
+    });
+  });
+
+  it("rejects disallowed upload MIME types before requesting Feishu", async () => {
+    const requests: RecordedRequest[] = [];
+    const context = createContext(requests, []);
+    context.transitFiles = {
+      maxBytes: 10 * 1024 * 1024,
+      async create() {
+        throw new Error("not used");
+      },
+      async read() {
+        return {
+          file: new File(["text"], "label.txt", { type: "text/plain" }),
+          sizeBytes: 4,
+          name: "label.txt",
+          mimeType: "text/plain",
+        };
+      },
+      async delete() {
+        return false;
+      },
+    };
+    await expect(
+      feishuBitableActionHandlers.upload_attachment(
+        {
+          appToken: "app1",
+          tableId: "tbl1",
+          recordId: "rec1",
+          fieldId: "Photo",
+          append: false,
+          file: { fileId: "file1" },
+        },
+        context,
+      ),
+    ).rejects.toMatchObject({ status: 415 });
+    expect(requests).toEqual([]);
   });
 
   it("normalizes aborted Feishu requests to 504", async () => {
