@@ -108,7 +108,7 @@ export const feishuBitableActionHandlers: Record<FeishuBitableActionName, Feishu
         body: { table: tableMutation(input.table) },
       },
       context,
-    ).then((response) => validateTableMutationResponse(response, "data.table"));
+    ).then(validateCreateTableResponse);
   },
   update_table(input, context) {
     const name = optionalString(input.name);
@@ -539,11 +539,9 @@ function validateAppMutationResponse(response: Record<string, unknown>, fieldNam
   return response;
 }
 
-function validateTableMutationResponse(response: Record<string, unknown>, fieldName: string): Record<string, unknown> {
+function validateCreateTableResponse(response: Record<string, unknown>): Record<string, unknown> {
   const data = requiredFeishuResponseRecord(response.data, "data");
-  const table = requiredFeishuResponseRecord(data.table, fieldName);
-  requiredFeishuResponseString(table.table_id, `${fieldName}.table_id`);
-  requiredFeishuResponseString(table.name, `${fieldName}.name`);
+  requiredFeishuResponseString(data.table_id, "data.table_id");
   return response;
 }
 

@@ -63,14 +63,18 @@ describe("Feishu Bitable provider", () => {
     const tableContextRequests: RecordedRequest[] = [];
     const tableContext = createContext(tableContextRequests, [
       tokenResponse(),
-      Response.json({ code: 0, msg: "success", data: { table: { table_id: "tbl1", name: "Inventory" } } }),
+      Response.json({
+        code: 0,
+        msg: "success",
+        data: { table_id: "tbl1", default_view_id: "vew1", field_id_list: ["fld1"] },
+      }),
     ]);
     await expect(
       feishuBitableActionHandlers.create_table(
         { appToken: "app1", table: { name: "Inventory", fields: [{ fieldName: "物料ID", type: 1 }] } },
         tableContext,
       ),
-    ).resolves.toMatchObject({ data: { table: { table_id: "tbl1" } } });
+    ).resolves.toMatchObject({ data: { table_id: "tbl1" } });
     expect(tableContextRequests[1]?.url).toContain("/bitable/v1/apps/app1/tables");
 
     const fieldRequests: RecordedRequest[] = [];
