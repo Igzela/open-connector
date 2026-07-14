@@ -2,6 +2,7 @@ import type { CredentialValidators, ExecutionContext, ProviderExecutors, Transit
 import type { FeishuBitableActionName } from "./actions.ts";
 
 import {
+  compactObject,
   optionalBoolean,
   optionalInteger,
   optionalRecord,
@@ -65,7 +66,7 @@ interface TokenCacheEntry {
 }
 
 interface JsonRequest {
-  method: "GET" | "POST" | "PUT";
+  method: "GET" | "POST" | "PUT" | "DELETE";
   path: string;
   query?: Array<[string, string]>;
   body?: Record<string, unknown>;
@@ -85,6 +86,86 @@ type FeishuBitableActionHandler = (
 const tokenCache = new Map<string, TokenCacheEntry>();
 
 export const feishuBitableActionHandlers: Record<FeishuBitableActionName, FeishuBitableActionHandler> = {
+  create_app(input, context) {
+    return executeJson(
+      {
+        method: "POST",
+        path: "/bitable/v1/apps",
+        body: compactObject({
+          name: providerString(input.name, "name"),
+          folder_token: optionalString(input.folderToken),
+          time_zone: optionalString(input.timeZone),
+        }),
+      },
+      context,
+    ).then((response) => validateAppMutationResponse(response, "data.app"));
+  },
+  create_table(input, context) {
+    return executeJson(
+      {
+        method: "POST",
+        path: `/bitable/v1/apps/${segment(input.appToken, "appToken")}/tables`,
+        body: { table: tableMutation(input.table) },
+      },
+      context,
+    ).then((response) => validateTableMutationResponse(response, "data.table"));
+  },
+  update_table(input, context) {
+    const name = optionalString(input.name);
+    const isAdvanced = optionalBoolean(input.isAdvanced);
+    if (name === undefined && isAdvanced === undefined) {
+      throw new ProviderRequestError(400, "At least one of name or isAdvanced is required");
+    }
+    return executeJson(
+      {
+        method: "PUT",
+        path: `/bitable/v1/apps/${segment(input.appToken, "appToken")}`,
+        body: compactObject({ name, is_advanced: isAdvanced }),
+      },
+      context,
+    ).then((response) => validateAppMutationResponse(response, "data.app"));
+  },
+  delete_table(input, context) {
+    assertExactId(input.tableId, input.confirmTableId, "tableId");
+    return executeJson(
+      {
+        method: "DELETE",
+        path: `/bitable/v1/apps/${segment(input.appToken, "appToken")}/tables/${segment(input.tableId, "tableId")}`,
+      },
+      context,
+    );
+  },
+  create_field(input, context) {
+    return executeJson(
+      {
+        method: "POST",
+        path: `/bitable/v1/apps/${segment(input.appToken, "appToken")}/tables/${segment(input.tableId, "tableId")}/fields`,
+        body: fieldMutation(input.field),
+      },
+      context,
+    ).then((response) => validateFieldMutationResponse(response, "data.field"));
+  },
+  update_field(input, context) {
+    assertExactId(input.fieldId, input.confirmFieldId, "fieldId");
+    return executeJson(
+      {
+        method: "PUT",
+        path: `/bitable/v1/apps/${segment(input.appToken, "appToken")}/tables/${segment(input.tableId, "tableId")}/fields/${segment(input.fieldId, "fieldId")}`,
+        body: fieldMutation(input.field),
+      },
+      context,
+    ).then((response) => validateFieldMutationResponse(response, "data.field"));
+  },
+  delete_field(input, context) {
+    assertExactId(input.fieldId, input.confirmFieldId, "fieldId");
+    return executeJson(
+      {
+        method: "DELETE",
+        path: `/bitable/v1/apps/${segment(input.appToken, "appToken")}/tables/${segment(input.tableId, "tableId")}/fields/${segment(input.fieldId, "fieldId")}`,
+      },
+      context,
+    );
+  },
   resolve_wiki_node(input, context) {
     return resolveWikiNode(input, context);
   },
@@ -403,6 +484,76 @@ function readBatchRecords(value: unknown): Array<{ fields: Record<string, unknow
       `records[${index}].fields`,
     ),
   }));
+}
+
+function tableMutation(value: unknown): Record<string, unknown> {
+  const table = requiredRecord(value, "table", (message) => new ProviderRequestError(400, message));
+  const fields = table.fields;
+  return compactObject({
+    name: providerString(table.name, "table.name"),
+    default_view_name: optionalString(table.defaultViewName),
+    fields: fields === undefined ? undefined : readFieldMutationArray(fields, "table.fields"),
+  });
+}
+
+function fieldMutation(value: unknown): Record<string, unknown> {
+  const field = requiredRecord(value, "field", (message) => new ProviderRequestError(400, message));
+  const type = optionalInteger(field.type);
+  if (type === undefined || type < 1 || type > 100) {
+    throw new ProviderRequestError(400, "field.type must be an integer from 1 to 100");
+  }
+  return compactObject({
+    field_name: providerString(field.fieldName, "field.fieldName"),
+    type,
+    property:
+      field.property === undefined
+        ? undefined
+        : requiredRecord(field.property, "field.property", (message) => new ProviderRequestError(400, message)),
+    description: optionalString(field.description),
+    ui_type: optionalString(field.uiType),
+  });
+}
+
+function readFieldMutationArray(value: unknown, fieldName: string): Array<Record<string, unknown>> {
+  if (!Array.isArray(value) || value.length > 300) {
+    throw new ProviderRequestError(400, `${fieldName} must contain no more than 300 fields`);
+  }
+  return value.map((item, index) => fieldMutation(itemForField(item, `${fieldName}[${index}]`)));
+}
+
+function itemForField(value: unknown, fieldName: string): Record<string, unknown> {
+  return requiredRecord(value, fieldName, (message) => new ProviderRequestError(400, message));
+}
+
+function assertExactId(value: unknown, confirmation: unknown, fieldName: string): void {
+  const actual = providerString(value, fieldName);
+  const expected = providerString(confirmation, `confirm${fieldName[0]!.toUpperCase()}${fieldName.slice(1)}`);
+  if (actual !== expected) throw new ProviderRequestError(400, `${fieldName} and its confirmation must match exactly`);
+}
+
+function validateAppMutationResponse(response: Record<string, unknown>, fieldName: string): Record<string, unknown> {
+  const data = requiredFeishuResponseRecord(response.data, "data");
+  const app = requiredFeishuResponseRecord(data.app, fieldName);
+  requiredFeishuResponseString(app.app_token, `${fieldName}.app_token`);
+  requiredFeishuResponseString(app.name, `${fieldName}.name`);
+  return response;
+}
+
+function validateTableMutationResponse(response: Record<string, unknown>, fieldName: string): Record<string, unknown> {
+  const data = requiredFeishuResponseRecord(response.data, "data");
+  const table = requiredFeishuResponseRecord(data.table, fieldName);
+  requiredFeishuResponseString(table.table_id, `${fieldName}.table_id`);
+  requiredFeishuResponseString(table.name, `${fieldName}.name`);
+  return response;
+}
+
+function validateFieldMutationResponse(response: Record<string, unknown>, fieldName: string): Record<string, unknown> {
+  const data = requiredFeishuResponseRecord(response.data, "data");
+  const field = requiredFeishuResponseRecord(data.field, fieldName);
+  requiredFeishuResponseString(field.field_id, `${fieldName}.field_id`);
+  requiredFeishuResponseString(field.field_name, `${fieldName}.field_name`);
+  if (optionalInteger(field.type) === undefined) throw new ProviderRequestError(502, `${fieldName}.type is missing`);
+  return response;
 }
 
 function paginationQuery(input: Record<string, unknown>): Array<[string, string]> {

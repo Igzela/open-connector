@@ -10,6 +10,13 @@ interface RecordedRequest {
 }
 
 const expectedActionNames = [
+  "create_app",
+  "create_table",
+  "update_table",
+  "delete_table",
+  "create_field",
+  "update_field",
+  "delete_field",
   "resolve_wiki_node",
   "list_tables",
   "list_fields",
@@ -32,6 +39,125 @@ describe("Feishu Bitable provider", () => {
     const action = feishuBitableActions.find((candidate) => candidate.name === "resolve_wiki_node");
     expect(action?.requiredScopes).toContain("wiki:wiki:readonly");
     expect(action?.providerPermissions).toContain("wiki:wiki:readonly");
+  });
+
+  it("creates a Base and validates the required response metadata", async () => {
+    const requests: RecordedRequest[] = [];
+    const context = createContext(requests, [
+      tokenResponse(),
+      Response.json({
+        code: 0,
+        msg: "success",
+        data: { app: { app_token: "app1", name: "Production", url: "https://example/base/app1" } },
+      }),
+    ]);
+
+    await expect(feishuBitableActionHandlers.create_app({ name: "Production" }, context)).resolves.toMatchObject({
+      data: { app: { app_token: "app1", name: "Production" } },
+    });
+    expect(requests[1]?.url).toBe("https://open.feishu.cn/open-apis/bitable/v1/apps");
+    expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({ name: "Production" });
+  });
+
+  it("creates, updates, and deletes tables and fields through exact official paths", async () => {
+    const tableContextRequests: RecordedRequest[] = [];
+    const tableContext = createContext(tableContextRequests, [
+      tokenResponse(),
+      Response.json({ code: 0, msg: "success", data: { table: { table_id: "tbl1", name: "Inventory" } } }),
+    ]);
+    await expect(
+      feishuBitableActionHandlers.create_table(
+        { appToken: "app1", table: { name: "Inventory", fields: [{ fieldName: "物料ID", type: 1 }] } },
+        tableContext,
+      ),
+    ).resolves.toMatchObject({ data: { table: { table_id: "tbl1" } } });
+    expect(tableContextRequests[1]?.url).toContain("/bitable/v1/apps/app1/tables");
+
+    const fieldRequests: RecordedRequest[] = [];
+    const fieldContext = createContext(fieldRequests, [
+      tokenResponse(),
+      Response.json({ code: 0, msg: "success", data: { field: { field_id: "fld1", field_name: "状态", type: 3 } } }),
+    ]);
+    await expect(
+      feishuBitableActionHandlers.create_field(
+        {
+          appToken: "app1",
+          tableId: "tbl1",
+          field: { fieldName: "状态", type: 3, property: { options: [{ name: "已确认" }] } },
+        },
+        fieldContext,
+      ),
+    ).resolves.toMatchObject({ data: { field: { field_id: "fld1" } } });
+    expect(fieldRequests[1]?.url).toContain("/tables/tbl1/fields");
+
+    const updateRequests: RecordedRequest[] = [];
+    const updateContext = createContext(updateRequests, [
+      tokenResponse(),
+      Response.json({ code: 0, msg: "success", data: { field: { field_id: "fld1", field_name: "状态", type: 3 } } }),
+    ]);
+    await expect(
+      feishuBitableActionHandlers.update_field(
+        {
+          appToken: "app1",
+          tableId: "tbl1",
+          fieldId: "fld1",
+          confirmFieldId: "fld1",
+          field: { fieldName: "状态", type: 3, property: { options: [{ name: "已入库" }] } },
+        },
+        updateContext,
+      ),
+    ).resolves.toMatchObject({ data: { field: { field_id: "fld1" } } });
+    expect(updateRequests[1]?.init?.method).toBe("PUT");
+
+    const deleteRequests: RecordedRequest[] = [];
+    const deleteContext = createContext(deleteRequests, [
+      tokenResponse(),
+      Response.json({ code: 0, msg: "success", data: { field_id: "fld1", deleted: true } }),
+    ]);
+    await expect(
+      feishuBitableActionHandlers.delete_field(
+        { appToken: "app1", tableId: "tbl1", fieldId: "fld1", confirmFieldId: "fld1" },
+        deleteContext,
+      ),
+    ).resolves.toMatchObject({ data: { field_id: "fld1", deleted: true } });
+    expect(deleteRequests[1]?.init?.method).toBe("DELETE");
+    expect(deleteRequests[1]?.url).toContain("/tables/tbl1/fields/fld1");
+  });
+
+  it("rejects mismatched destructive IDs before network access", async () => {
+    const requests: RecordedRequest[] = [];
+    const context = createContext(requests, []);
+    await expect(
+      Promise.resolve().then(() =>
+        feishuBitableActionHandlers.delete_table(
+          { appToken: "app1", tableId: "tbl1", confirmTableId: "tbl2" },
+          context,
+        ),
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      Promise.resolve().then(() =>
+        feishuBitableActionHandlers.delete_field(
+          { appToken: "app1", tableId: "tbl1", fieldId: "fld1", confirmFieldId: "fld2" },
+          context,
+        ),
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(requests).toEqual([]);
+  });
+
+  it("rejects missing mutation response fields and maps rate limits", async () => {
+    const missing = createContext([], [tokenResponse(), Response.json({ code: 0, msg: "success", data: { app: {} } })]);
+    await expect(feishuBitableActionHandlers.create_app({ name: "Production" }, missing)).rejects.toMatchObject({
+      status: 502,
+    });
+    const limited = createContext(
+      [],
+      [tokenResponse(), Response.json({ code: 11232, msg: "rate limited" }, { status: 429 })],
+    );
+    await expect(feishuBitableActionHandlers.create_app({ name: "Production" }, limited)).rejects.toMatchObject({
+      status: 429,
+    });
   });
 
   it("resolves a Wiki Bitable node to its Base app token", async () => {

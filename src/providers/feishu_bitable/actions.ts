@@ -121,6 +121,64 @@ const transitFileSchema = s.requiredObject("The downloaded attachment stored in 
   sizeBytes: s.integer("Downloaded attachment size in bytes."),
 });
 
+const fieldMutationSchema = s.object(
+  "A strict Feishu field definition.",
+  {
+    fieldName: s.string({ description: "The field display name.", minLength: 1, maxLength: 100 }),
+    type: s.integer("The Feishu field type code.", { minimum: 1, maximum: 100 }),
+    property: s.record("The complete Feishu field property object.", s.unknown("A property value.")),
+    description: s.string("Optional field description.", { maxLength: 2000 }),
+    uiType: s.string("Optional Feishu field UI type.", { minLength: 1, maxLength: 32 }),
+  },
+  { optional: ["property", "description", "uiType"] },
+);
+const fieldMutationItemSchema = s.object(
+  "One field to create in a Feishu table.",
+  {
+    fieldName: s.string({ description: "The field display name.", minLength: 1, maxLength: 100 }),
+    type: s.integer("The Feishu field type code.", { minimum: 1, maximum: 100 }),
+    property: s.record("The complete Feishu field property object.", s.unknown("A property value.")),
+    description: s.string("Optional field description.", { maxLength: 2000 }),
+    uiType: s.string("Optional Feishu field UI type.", { minLength: 1, maxLength: 32 }),
+  },
+  { optional: ["property", "description", "uiType"] },
+);
+const appOutput = envelopeSchema(
+  "Feishu Base creation or update response.",
+  s.looseRequiredObject(
+    "Feishu Base metadata.",
+    {
+      app: s.looseRequiredObject(
+        "Feishu Base metadata.",
+        {
+          app_token: s.nonEmptyString("The Base app_token."),
+          name: s.nonEmptyString("The Base name."),
+          url: s.string("The Base URL.", { minLength: 1 }),
+          default_table_id: s.nonEmptyString("The default table ID."),
+        },
+        { optional: ["url", "default_table_id"] },
+      ),
+    },
+    { optional: ["app"] },
+  ),
+);
+const tableMutationOutput = envelopeSchema(
+  "Feishu table mutation response.",
+  s.looseRequiredObject("Feishu table metadata.", { table: tableSchema }, { optional: ["table"] }),
+);
+const fieldMutationOutput = envelopeSchema(
+  "Feishu field mutation response.",
+  s.looseRequiredObject(
+    "Feishu field metadata.",
+    {
+      field: fieldSchema,
+      field_id: s.nonEmptyString("The affected field ID."),
+      deleted: s.boolean("Whether the field was deleted."),
+    },
+    { optional: ["field", "field_id", "deleted"] },
+  ),
+);
+
 function paginationProperties() {
   return {
     pageSize: pageSizeSchema,
@@ -129,6 +187,108 @@ function paginationProperties() {
 }
 
 export const feishuBitableActions: ActionDefinition[] = [
+  defineProviderAction(service, {
+    name: "create_app",
+    description: "Create one Feishu Base with the official Server API.",
+    requiredScopes,
+    providerPermissions: requiredScopes,
+    inputSchema: s.object(
+      "Input for creating one Feishu Base.",
+      {
+        name: s.string({ description: "The Base name.", minLength: 1, maxLength: 255 }),
+        folderToken: s.string("Optional folder token.", { minLength: 1 }),
+        timeZone: s.string("Optional IANA time zone.", { minLength: 1 }),
+      },
+      { optional: ["folderToken", "timeZone"] },
+    ),
+    outputSchema: appOutput,
+  }),
+  defineProviderAction(service, {
+    name: "create_table",
+    description: "Create one explicitly named Feishu Base table, optionally with fields.",
+    requiredScopes,
+    providerPermissions: requiredScopes,
+    inputSchema: s.requiredObject("Input for creating one Feishu table.", {
+      appToken: appTokenSchema,
+      table: s.object(
+        "The official Feishu table object.",
+        {
+          name: s.string({ description: "The table name.", minLength: 1, maxLength: 100 }),
+          defaultViewName: s.string("Optional default view name.", { minLength: 1, maxLength: 100 }),
+          fields: s.array("Optional fields created with the table.", fieldMutationItemSchema, { maxItems: 300 }),
+        },
+        { optional: ["defaultViewName", "fields"] },
+      ),
+    }),
+    outputSchema: tableMutationOutput,
+  }),
+  defineProviderAction(service, {
+    name: "update_table",
+    description: "Update one Feishu Base metadata object by exact app token.",
+    requiredScopes,
+    providerPermissions: requiredScopes,
+    inputSchema: s.object(
+      "Input for updating one Feishu Base.",
+      {
+        appToken: appTokenSchema,
+        name: s.string({ description: "Optional replacement Base name.", minLength: 1, maxLength: 100 }),
+        isAdvanced: s.boolean("Optional advanced-permission setting."),
+      },
+      { optional: ["name", "isAdvanced"] },
+    ),
+    outputSchema: appOutput,
+  }),
+  defineProviderAction(service, {
+    name: "delete_table",
+    description: "Delete one Feishu Base table only when tableId and confirmTableId match exactly.",
+    requiredScopes,
+    providerPermissions: requiredScopes,
+    inputSchema: s.requiredObject("Input for deleting one exact Feishu table.", {
+      appToken: appTokenSchema,
+      tableId: tableIdSchema,
+      confirmTableId: tableIdSchema,
+    }),
+    outputSchema: tableMutationOutput,
+  }),
+  defineProviderAction(service, {
+    name: "create_field",
+    description: "Create one explicitly named Feishu field with an official field type and property.",
+    requiredScopes,
+    providerPermissions: requiredScopes,
+    inputSchema: s.requiredObject("Input for creating one Feishu field.", {
+      appToken: appTokenSchema,
+      tableId: tableIdSchema,
+      field: fieldMutationSchema,
+    }),
+    outputSchema: fieldMutationOutput,
+  }),
+  defineProviderAction(service, {
+    name: "update_field",
+    description: "Replace one exact Feishu field definition, including its property/options.",
+    requiredScopes,
+    providerPermissions: requiredScopes,
+    inputSchema: s.requiredObject("Input for updating one exact Feishu field.", {
+      appToken: appTokenSchema,
+      tableId: tableIdSchema,
+      fieldId: s.nonEmptyString("The exact field ID."),
+      confirmFieldId: s.nonEmptyString("The exact field ID confirmation."),
+      field: fieldMutationSchema,
+    }),
+    outputSchema: fieldMutationOutput,
+  }),
+  defineProviderAction(service, {
+    name: "delete_field",
+    description: "Delete one Feishu field only when fieldId and confirmFieldId match exactly.",
+    requiredScopes,
+    providerPermissions: requiredScopes,
+    inputSchema: s.requiredObject("Input for deleting one exact Feishu field.", {
+      appToken: appTokenSchema,
+      tableId: tableIdSchema,
+      fieldId: s.nonEmptyString("The exact field ID."),
+      confirmFieldId: s.nonEmptyString("The exact field ID confirmation."),
+    }),
+    outputSchema: fieldMutationOutput,
+  }),
   defineProviderAction(service, {
     name: "resolve_wiki_node",
     description: "Resolve a Feishu Wiki node token to its backing object and Base app token when it is a Bitable.",
@@ -263,6 +423,13 @@ export const feishuBitableActions: ActionDefinition[] = [
 ];
 
 export type FeishuBitableActionName =
+  | "create_app"
+  | "create_table"
+  | "update_table"
+  | "delete_table"
+  | "create_field"
+  | "update_field"
+  | "delete_field"
   | "resolve_wiki_node"
   | "list_tables"
   | "list_fields"
